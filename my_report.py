@@ -1,4 +1,16 @@
 # 1. 导入一些会使用的库，numpy, torch, matplotlib, gymnasium
+import gymnasium as gym
+from TaskOffloadEnv import TaskOffloadEnv # 一个是文件名，一个是类名
+
+env = TaskOffloadEnv(num_servers=3)
+
+for episode in range(5):
+    obs, info = env.reset()
+    done = False
+    while not done:
+        action = env.action_space.sample()  # 用随机策略演示
+        obs, reward, done, truncated, info = env.step(action)
+        print(f"Action: {action}, Reward: {reward}, Info: {info}")
 
 
 
