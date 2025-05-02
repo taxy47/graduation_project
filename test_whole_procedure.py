@@ -58,7 +58,8 @@ class TaskOffloadEnv(gym.Env):
     def _generate_task(self): 
         cpu = np.random.uniform(1, 10)
         deadline = np.random.uniform(0.1, 1.0)
-        return np.array([cpu / 10.0, deadline], dtype=np.float32)
+        # return np.array([cpu / 10.0, deadline], dtype=np.float32)
+        return self.observation_space.sample() # 直接使用 gym 的 sample 方法生成随机数
 
     def step(self, action):
         cpu_need = self.current_task[0] * 10    # 还原原始值， 动作映射关系
@@ -102,7 +103,7 @@ class TaskOffloadEnv(gym.Env):
         compute_time = cpu_need / compute_power
         total_delay = compute_time + latency
 
-        reward = 1.0 if total_delay <= deadline else -1.0
+        reward = - total_delay
         done = True                                       # 每次只处理一个任务，回合就结束，是实际就发送一次而已
 
         info = {"total_delay": total_delay}               #提示信息
@@ -150,7 +151,7 @@ class DQN:
 
     def compute_loss(self, s_batch, a_batch, r_batch, d_batch, next_s_batch):
         # notice the shape of input and output!!!
-        qvals = self.Q(s_batch).gather(1, a_batch.unsqueeze(1)).squeeze()
+        qvals = self.Q(s_batch).gather(1, a_batch.unsqueeze(1)).squeeze() # manipulate the data, and pick what we want
         # next_qvals = self.Q(next_s_batch)
         # next_qvals = self.target_Q(next_s_batch)
         next_qvals = self.target_Q(next_s_batch).max(dim=1)[0]
@@ -230,58 +231,96 @@ import torch.nn as nn        # 这个是 torch 的神经网络库，torch.nn 里
 import torch.optim as optim  # 这个是 torch 的优化器，torch.optim 里面有很多优化器可以使用
 import torch.nn.functional as F # 这个是 torch 的函数库，torch.nn.functional 里面有很多函数可以使用
 
-
-env = TaskOffloadEnv(num_servers=3)
-replay_buffer = ReplayBuffer(10_000)
-
-#TODO: 设置不同的 task，整数随机，浮点数随机，等比数列随机
-
-num_episodes = 10 # 总共的 episode 数量， 凑成一个 task 的训练样本
-for episode in range(num_episodes):
-    obs, info = env.reset() # 
-    done = False
-
-    n = 20
-    k = 5
-    episode_size = n + k # 每个 episode 的 step 大小
-    count = 0
-
-    # obs = env.reset()
-
-    print(f"episode{episode}:")
-    while count < episode_size:
-        count += 1
-        action = env.action_space.sample()  # 用随机策略演示
-
-        x = torch.randn(5, 2)
-        # qnet = Qnet(2, 3)
-        dqn = DQN(2, 3)
-        # y = qnet(x)
-        y = dqn.get_action(x)
-
-        # print(f'x{}')
-        print("x:")
-        print(x)
-        print("y:")
-        print(y)
-        
-        obs_, reward, done, truncated, info = env.step(action)
-        print(f"obs is : {obs}")
-        
-        print(f"Action: {action}, Reward: {reward}, Info: {info}")
-
-        replay_buffer.push(obs, action, reward, 0, obs_)
-        obs = obs_
-        
-        with open("episode.txt", "a+") as f:
-            f.write(f"episode{episode}:") # 没有换行
-            f.write(f"Action: {action}, Reward: {reward}, Info: {info}\n")
-    print("\n")
+def task_train(env):
+    # pass
 
 
-state, action, reward, done, state_ = replay_buffer.sample(5)
-print(state)
-print(action)
-print(reward)
-print(done)
-print(state_)
+    # env = env_list[0] # 元学习需要改变任务的参数，或者说环境的参数
+    replay_buffer = ReplayBuffer(10_000) # mate 一个 buffer, 每个 task 一个 buffer, 还是一个 buffer(封装成一个类会好一点)
+
+    #: 设置不同的 task，整数随机，浮点数随机，等比数列随机
+    #: 如果要动态修改环境参数，就需要封装起来，且有接口或者参数修改
+
+    num_episodes = 10 # 总共的 episode 数量， 凑成一个 task 的训练样本，这只是普通的强化学习
+    for episode in range(num_episodes):
+        obs, info = env.reset() # 元学习和元编程很类似，都是参数模板化
+        done = False
+
+        n = 20
+        k = 5
+        episode_size = n + k # 每个 episode 的 step 大小
+        count = 0
+
+        # obs = env.reset()
+
+        print(f"episode{episode}:")
+        while count < episode_size:
+            count += 1
+            action = env.action_space.sample()  # 用随机策略演示
+
+            x = torch.randn(5, 2)
+            # qnet = Qnet(2, 3)
+            dqn = DQN(2, 3)
+            # y = qnet(x)
+            y = dqn.get_action(x)
+
+            # print(f'x{}')
+            print("x:")
+            print(x)
+            print("y:")
+            print(y)
+            
+            obs_, reward, done, truncated, info = env.step(action)
+            print(f"obs is : {obs}")
+            
+            print(f"Action: {action}, Reward: {reward}, Info: {info}")
+
+            replay_buffer.push(obs, action, reward, 0, obs_)
+            obs = obs_ # 这里的 obs_ 是下一个状态， obs 是当前状态
+            
+            with open("episode.txt", "a+") as f:
+                f.write(f"episode{episode}:") # 没有换行
+                f.write(f"Action: {action}, Reward: {reward}, Info: {info}\n")
+        print("\n")
+
+    # 持久化数据，或者持久化神经网络参数模型，replay_buffer 在什么时候清空，尤其是元学习会有不同的任务，不同任务的 replay_buffer 是不同的
+    # each task 训练就是普通的强化学习（从头，制定的数据，对当前环境参数的最优策略）
+    state, action, reward, done, state_ = replay_buffer.sample(5)
+    print(state)
+    print(action)
+    print(reward)
+    print(done)
+    print(state_)
+
+    # test for painting
+
+    print(type(state[0]))
+    print(type(action[0])) #  list of ndarray type, could be used for painting
+    print(type(reward))
+    print(type(done))
+    print(type(state_[0]))
+
+    x = np.linspace(0, len(replay_buffer.reward), len(replay_buffer.reward)) # 画图的 x 轴
+    y = np.linspace(0, 1, num_episodes) # 画图的 y 轴
+    print(y)
+    plt.figure(figsize=(10, 5))
+    plt.plot(x, replay_buffer.reward, label='test for training')
+    plt.grid(True)
+    plt.show()
+
+
+def make_env_array(): # 制作 环境数组
+    env_array = []
+    for i in range(1, 3):
+        env = TaskOffloadEnv(num_servers = 3) # TODO:
+        env_array.append(env)
+    return env_array
+
+env_list = make_env_array()
+# print(len(env_list))
+# assert len(env_list) == 3, "env list length is not 2"
+
+# env = TaskOffloadEnv(num_servers=3) # 元学习需要改变任务的参数，或者说环境的参数
+for i in range(len(env_list)):
+    env = env_list[i]
+    task_train(env)
