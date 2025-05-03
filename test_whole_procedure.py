@@ -1,11 +1,7 @@
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
-
 import random
-
-
-
 
 class cloud_server(): # 云服务器
     pass
@@ -248,6 +244,10 @@ import torch.nn.functional as F # 这个是 torch 的函数库，torch.nn.functi
 def task_train(env):
     # pass
 
+    eps_start = 1.0
+    eps_end = 0.05
+    eps_decay = 0.98
+    epsilon = eps_start
 
     # env = env_list[0] # 元学习需要改变任务的参数，或者说环境的参数
     replay_buffer = ReplayBuffer(10_000) # mate 一个 buffer, 每个 task 一个 buffer, 还是一个 buffer(封装成一个类会好一点)
@@ -257,24 +257,28 @@ def task_train(env):
     #: 如果要动态修改环境参数，就需要封装起来，且有接口或者参数修改
     dqn = DQN(2, 3)
     # loss = 
-    optimizer = optim.Adam(dqn.Q.parameters(), lr=0.001) # 优化器，使用 Adam 优化器，学习率 0.001
+    optimizer = optim.SGD(dqn.Q.parameters(), lr=0.001) # 优化器，使用 Adam 优化器，学习率 0.001
 
-    num_episodes = 50 # 总共的 episode 数量， 凑成一个 task 的训练样本，这只是普通的强化学习
+    num_episodes = 200 # 总共的 episode 数量， 凑成一个 task 的训练样本，这只是普通的强化学习
+    episode_reward_list = []
+    
+
     for episode in range(num_episodes):
+        episode_reward = 0.0
         obs, info = env.reset() # 元学习和元编程很类似，都是参数模板化
         done = False
 
-        n = 20
+        n = 35
         k = 5
-        episode_size = n + k # 每个 episode 的 step 大小
+        max_step = n + k # 每个 episode 的 step 大小
         count = 0
 
         # obs = env.reset()
 
         print(f"episode{episode}:")
-        while count < episode_size:
+        while count < max_step:
             count += 1
-            if (count < 10):
+            if (random.random() < epsilon):
                 action = env.action_space.sample()  # 用随机策略演示
             else:
                 # action = 
@@ -284,6 +288,7 @@ def task_train(env):
             # qnet = Qnet(2, 3)
             # y = qnet(x)
             # loss = 
+            # if count % 5 == 0 and count > 5:
             if count % 5 == 0 and count > 5:
                 s_b, a_b, r_b, d_b, s_b_ = replay_buffer.sample(5) # 采样数据
                 s_b = torch.tensor(s_b, dtype=torch.float32).to(device)
@@ -301,6 +306,7 @@ def task_train(env):
             print(f"obs is : {obs}")
             
             print(f"Action: {action}, Reward: {reward}, Info: {info}")
+            episode_reward += reward
 
             replay_buffer.push(obs, action, reward, 0, obs_)
             obs = obs_ # 这里的 obs_ 是下一个状态， obs 是当前状态
@@ -308,6 +314,9 @@ def task_train(env):
             with open("episode.txt", "a+") as f:
                 f.write(f"episode{episode}:") # 没有换行
                 f.write(f"Action: {action}, Reward: {reward}, Info: {info}\n")
+
+        epsilon = max(eps_end, epsilon * eps_decay) # 衰减 epsilon     
+        episode_reward_list.append(episode_reward / max_step) # 计算平均奖励      
         print("\n")
 
     # 持久化数据，或者持久化神经网络参数模型，replay_buffer 在什么时候清空，尤其是元学习会有不同的任务，不同任务的 replay_buffer 是不同的
@@ -327,11 +336,11 @@ def task_train(env):
     print(type(done))
     print(type(state_[0]))
 
-    x = np.linspace(0, len(replay_buffer.reward), len(replay_buffer.reward)) # 画图的 x 轴
+    x = np.linspace(0, num_episodes, num_episodes) # 画图的 x 轴
     # y = np.linspace(0, 1, num_episodes) # 画图的 y 轴
     # print(y)
     plt.figure(figsize=(10, 5))
-    plt.plot(x, replay_buffer.reward, label='test for training')
+    plt.plot(x, episode_reward_list, label='test for training')
     # 保存图像，训练非阻塞
 
 
