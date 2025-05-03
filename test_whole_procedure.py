@@ -4,6 +4,9 @@ import numpy as np
 
 import random
 
+
+
+
 class cloud_server(): # 云服务器
     pass
 
@@ -122,6 +125,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# cuda 设备的使用
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
+
 class Qnet(nn.Module):
     def __init__(self, state_dim, action_dim):
         super().__init__()
@@ -140,22 +147,29 @@ class Qnet(nn.Module):
 class DQN:
     def __init__(self, state_dim=None, action_dim=None, discount=0.9):
         self.discount = discount
-        self.Q = Qnet(state_dim, action_dim)
-        self.target_Q = Qnet(state_dim, action_dim)
-        self.target_Q.load_state_dict(self.Q.state_dict())
+        self.Q = Qnet(state_dim, action_dim).to(device)
+        self.target_Q = Qnet(state_dim, action_dim).to(device)
+        self.target_Q.load_state_dict(self.Q.state_dict()) # copy the parameters from Q to target_Q
+        # self.target_Q.eval() # set the target Q network to evaluation mode
 
     def get_action(self, state):
         qvals = self.Q(state)
-        action = qvals.argmax() # index is action, value is q-function value
+        print("qvals: ", qvals)
+        action = qvals.argmax() % qvals.size(1) # index is action, value is q-function value
         return action
 
     def compute_loss(self, s_batch, a_batch, r_batch, d_batch, next_s_batch):
         # notice the shape of input and output!!!
-        qvals = self.Q(s_batch).gather(1, a_batch.unsqueeze(1)).squeeze() # manipulate the data, and pick what we want
+        print("s_batch: ", s_batch.shape)
+        print("a_batch: ", a_batch.shape)
+        print("a_type", type(a_batch[0].item()))
+        print("hello")
+
+        qvals = self.Q(s_batch).gather(1, a_batch.unsqueeze(1)).squeeze(1) # manipulate the data, and pick what we want
         # next_qvals = self.Q(next_s_batch)
         # next_qvals = self.target_Q(next_s_batch)
         next_qvals = self.target_Q(next_s_batch).max(dim=1)[0]
-        loss = F.mse_loss(r_batch + self.discount * next_qvals, qvals)
+        loss = F.mse_loss(r_batch + self.discount * next_qvals * (1 - d_batch), qvals)
 
         return loss
         
@@ -238,10 +252,14 @@ def task_train(env):
     # env = env_list[0] # 元学习需要改变任务的参数，或者说环境的参数
     replay_buffer = ReplayBuffer(10_000) # mate 一个 buffer, 每个 task 一个 buffer, 还是一个 buffer(封装成一个类会好一点)
 
+
     #: 设置不同的 task，整数随机，浮点数随机，等比数列随机
     #: 如果要动态修改环境参数，就需要封装起来，且有接口或者参数修改
+    dqn = DQN(2, 3)
+    # loss = 
+    optimizer = optim.Adam(dqn.Q.parameters(), lr=0.001) # 优化器，使用 Adam 优化器，学习率 0.001
 
-    num_episodes = 10 # 总共的 episode 数量， 凑成一个 task 的训练样本，这只是普通的强化学习
+    num_episodes = 50 # 总共的 episode 数量， 凑成一个 task 的训练样本，这只是普通的强化学习
     for episode in range(num_episodes):
         obs, info = env.reset() # 元学习和元编程很类似，都是参数模板化
         done = False
@@ -256,19 +274,28 @@ def task_train(env):
         print(f"episode{episode}:")
         while count < episode_size:
             count += 1
-            action = env.action_space.sample()  # 用随机策略演示
-
-            x = torch.randn(5, 2)
+            if (count < 10):
+                action = env.action_space.sample()  # 用随机策略演示
+            else:
+                # action = 
+                print("obs: ", obs)
+                action = dqn.get_action(torch.tensor([obs]).to(device)) # 这里的 obs 是当前状态， obs_ 是下一个状态
+            # x = torch.randn(5, 2)
             # qnet = Qnet(2, 3)
-            dqn = DQN(2, 3)
             # y = qnet(x)
-            y = dqn.get_action(x)
-
-            # print(f'x{}')
-            print("x:")
-            print(x)
-            print("y:")
-            print(y)
+            # loss = 
+            if count % 5 == 0 and count > 5:
+                s_b, a_b, r_b, d_b, s_b_ = replay_buffer.sample(5) # 采样数据
+                s_b = torch.tensor(s_b, dtype=torch.float32).to(device)
+                a_b = torch.tensor(a_b, dtype=torch.int64).to(device) # 索引需要整数
+                r_b = torch.tensor(r_b, dtype=torch.float32).to(device)
+                d_b = torch.tensor(d_b, dtype=torch.float32).to(device)
+                s_b_ = torch.tensor(s_b_, dtype=torch.float32).to(device)
+                print("trainning...")
+                loss = dqn.compute_loss(s_b, a_b, r_b, d_b, s_b_)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
             
             obs_, reward, done, truncated, info = env.step(action)
             print(f"obs is : {obs}")
@@ -301,10 +328,13 @@ def task_train(env):
     print(type(state_[0]))
 
     x = np.linspace(0, len(replay_buffer.reward), len(replay_buffer.reward)) # 画图的 x 轴
-    y = np.linspace(0, 1, num_episodes) # 画图的 y 轴
-    print(y)
+    # y = np.linspace(0, 1, num_episodes) # 画图的 y 轴
+    # print(y)
     plt.figure(figsize=(10, 5))
     plt.plot(x, replay_buffer.reward, label='test for training')
+    # 保存图像，训练非阻塞
+
+
     plt.grid(True)
     plt.show()
 
@@ -320,7 +350,15 @@ env_list = make_env_array()
 # print(len(env_list))
 # assert len(env_list) == 3, "env list length is not 2"
 
-# env = TaskOffloadEnv(num_servers=3) # 元学习需要改变任务的参数，或者说环境的参数
-for i in range(len(env_list)):
-    env = env_list[i]
+# env = TaskOffloadEnv(num_servers=3) # 元学习需要改变任务的参数值，但是如果数量改变导致神经网络结构变化就不能够复用了
+def sample_env(env_list):
+    env = random.choice(env_list)
+    return env
+
+num_task_episodes = 1
+for i in range(num_task_episodes):
+
+    env = sample_env(env_list)
     task_train(env)
+
+# 状态维度变化，动作维度变化，任务结构变化，元学习是不太好的
