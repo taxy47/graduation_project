@@ -263,7 +263,7 @@ def task_train(env, meta_dqn, meta_loss, meta_optimizer): # 训练一个 task �
     dqn_copy = DQN(2, 3)
     dqn_copy.Q.load_state_dict(meta_dqn.Q.state_dict()) # copy the parameters from meta_dqn to dqn_copy
     # loss = 
-    optimizer = optim.Adam(dqn_copy.Q.parameters(), lr=0.0001) # 优化器，使用 Adam 优化器，学习率 0.001
+    optimizer = optim.Adam(dqn_copy.Q.parameters(), lr=0.001) # 优化器，使用 Adam 优化器，学习率 0.001
 
     num_episodes = 800 # 总共的 episode 数量， 凑成一个 task 的训练样本，这只是普通的强化学习
     episode_reward_list = []
@@ -388,6 +388,8 @@ def task_train(env, meta_dqn, meta_loss, meta_optimizer): # 训练一个 task �
     plt.grid(True)
     plt.show()
 
+    return meta_loss
+
 
 def make_env_array(): # 制作 环境数组
     env_array = []
@@ -414,14 +416,17 @@ if __name__ == "__main__":
     meta_optimizer = optim.Adam(meta_dqn.Q.parameters(), lr=0.001) # 元优化器，使用 Adam 优化器，学习率 0.001
 
 
-    num_task_episodes = 3
+    num_task_episodes = 1
     for i in range(num_task_episodes):
 
         env = sample_env(env_list)
-        task_train(env, meta_dqn, meta_loss, meta_optimizer) # 将元神经网络也传入, 浅拷贝，传的是引用
+        task_loss = task_train(env, meta_dqn, meta_loss, meta_optimizer) # 将元神经网络也传入, 浅拷贝，传的是引用
+        meta_loss += task_loss
 
     # 状态维度变化，动作维度变化，任务结构变化，元学习是不太好的
     # TODO: 所有 task 完成后，更新 meta model, 并且保存模型参数
+
+    meta_loss = meta_loss / num_task_episodes # 计算平均损失
 
 
     meta_optimizer.zero_grad() # 清空梯度
