@@ -168,6 +168,10 @@ class DQN:
         loss = F.mse_loss(r_batch + self.discount * next_qvals * (1 - d_batch), qvals)
 
         return loss
+    
+    def softupdate_target(self, tau=0.01): # soft update the target Q network
+        for target_param, param in zip(self.target_Q.parameters(), self.Q.parameters()):
+            target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)
         
 
 
@@ -241,8 +245,9 @@ import torch.nn as nn        # 这个是 torch 的神经网络库，torch.nn 里
 import torch.optim as optim  # 这个是 torch 的优化器，torch.optim 里面有很多优化器可以使用
 import torch.nn.functional as F # 这个是 torch 的函数库，torch.nn.functional 里面有很多函数可以使用
 
-def task_train(env):
+def task_train(env, meta_dqn, meta_loss, meta_optimizer): # 训练一个 task 的函数
     # pass
+    meta_optimizer.zero_grad() # 清空梯度
 
     eps_start = 1.0
     eps_end = 0.05
@@ -255,9 +260,10 @@ def task_train(env):
 
     #: 设置不同的 task，整数随机，浮点数随机，等比数列随机
     #: 如果要动态修改环境参数，就需要封装起来，且有接口或者参数修改
-    dqn = DQN(2, 3)
+    dqn_copy = DQN(2, 3)
+    dqn_copy.Q.load_state_dict(meta_dqn.Q.state_dict()) # copy the parameters from meta_dqn to dqn_copy
     # loss = 
-    optimizer = optim.Adam(dqn.Q.parameters(), lr=0.001) # 优化器，使用 Adam 优化器，学习率 0.001
+    optimizer = optim.Adam(dqn_copy.Q.parameters(), lr=0.0001) # 优化器，使用 Adam 优化器，学习率 0.001
 
     num_episodes = 800 # 总共的 episode 数量， 凑成一个 task 的训练样本，这只是普通的强化学习
     episode_reward_list = []
@@ -283,7 +289,7 @@ def task_train(env):
             else:
                 # action = 
                 print("obs: ", obs)
-                action = dqn.get_action(torch.tensor([obs]).to(device)) # 这里的 obs 是当前状态， obs_ 是下一个状态
+                action = dqn_copy.get_action(torch.tensor([obs]).to(device)) # 这里的 obs 是当前状态， obs_ 是下一个状态
             # x = torch.randn(5, 2)
             # qnet = Qnet(2, 3)
             # y = qnet(x)
@@ -297,7 +303,7 @@ def task_train(env):
                 d_b = torch.tensor(d_b, dtype=torch.float32).to(device)
                 s_b_ = torch.tensor(s_b_, dtype=torch.float32).to(device)
                 print("trainning...")
-                loss = dqn.compute_loss(s_b, a_b, r_b, d_b, s_b_)
+                loss = dqn_copy.compute_loss(s_b, a_b, r_b, d_b, s_b_)
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
@@ -311,16 +317,44 @@ def task_train(env):
             replay_buffer.push(obs, action, reward, 0, obs_)
             obs = obs_ # 这里的 obs_ 是下一个状态， obs 是当前状态
             
-            with open("episode.txt", "a+") as f:
-                f.write(f"episode{episode}:") # 没有换行
-                f.write(f"Action: {action}, Reward: {reward}, Info: {info}\n")
+            # with open("episode.txt", "a+") as f:
+            #     f.write(f"episode{episode}:") # 没有换行
+            #     f.write(f"Action: {action}, Reward: {reward}, Info: {info}\n")
 
         epsilon = max(eps_end, epsilon * eps_decay) # 衰减 epsilon     
         episode_reward_list.append(episode_reward / max_step) # 计算平均奖励      
         print("\n")
 
+        # if episode % 20 == 0: # 每 20 个 episode 更新 meta model
+        #     # meta_pred = dqn_copy.Q(torch.tensor([obs]).to(device))
+        #     pass # update the meta model
+
     # 持久化数据，或者持久化神经网络参数模型，replay_buffer 在什么时候清空，尤其是元学习会有不同的任务，不同任务的 replay_buffer 是不同的
     # each task 训练就是普通的强化学习（从头，制定的数据，对当前环境参数的最优策略）
+    # meta_dqn.
+    # 1. reptile method, 先训练一个 task，然后再训练下一个 task，最后更新 meta model
+    # for meta_param, param in zip(meta_dqn.Q.parameters(), dqn_copy.Q.parameters()):
+    #     meta_param.data.copy_(meta_param.data + 0.1 * (param.data - meta_param.data)) # 这里的 0.1 是学习率，元学习的学习率
+
+    # 取新的 20 episode，太多了 作为 query 数据，但是神经网络的更新是 step 层面啊
+    # 1 episodes = 40 transition, 20 episodes = 800 transition, 容易对应过拟合，且计算量大
+    query_episodes = 5
+    for query_episode in range(query_episodes):
+        # query_max_step = 40
+        s_b, a_b, r_b, d_b, s_b_ = replay_buffer.sample(40) # 采样数据
+        s_b = torch.tensor(s_b, dtype=torch.float32).to(device)
+        a_b = torch.tensor(a_b, dtype=torch.int64).to(device) # 索引需要整数
+        r_b = torch.tensor(r_b, dtype=torch.float32).to(device)
+        d_b = torch.tensor(d_b, dtype=torch.float32).to(device)
+        s_b_ = torch.tensor(s_b_, dtype=torch.float32).to(device)
+        query_loss = dqn_copy.compute_loss(s_b, a_b, r_b, d_b, s_b_)
+        print("query_loss: ", query_loss)
+        meta_loss += query_loss
+
+    meta_loss = meta_loss / query_episodes
+
+
+
     state, action, reward, done, state_ = replay_buffer.sample(5)
     print(state)
     print(action)
@@ -340,9 +374,9 @@ def task_train(env):
     # y = np.linspace(0, 1, num_episodes) # 画图的 y 轴
     # print(y)
 
-    with open("traning_data_0.001.txt", "w") as f:
-        for i in range(num_episodes):
-            f.write(f"{episode_reward_list[i]}\n")
+    # with open("./traning_data_0.0001.txt", "w") as f:
+    #     for i in range(num_episodes):
+    #         f.write(f"{episode_reward_list[i]}\n")
 
     plt.figure(figsize=(5, 5))
     plt.plot(x, episode_reward_list, label='test for training')
@@ -362,19 +396,41 @@ def make_env_array(): # 制作 环境数组
         env_array.append(env)
     return env_array
 
-env_list = make_env_array()
-# print(len(env_list))
-# assert len(env_list) == 3, "env list length is not 2"
-
 # env = TaskOffloadEnv(num_servers=3) # 元学习需要改变任务的参数值，但是如果数量改变导致神经网络结构变化就不能够复用了
 def sample_env(env_list):
     env = random.choice(env_list)
     return env
 
-num_task_episodes = 1
-for i in range(num_task_episodes):
+if __name__ == "__main__":
 
-    env = sample_env(env_list)
-    task_train(env)
+    env_list = make_env_array()
+    # print(len(env_list))
+    # assert len(env_list) == 3, "env list length is not 2"
 
-# 状态维度变化，动作维度变化，任务结构变化，元学习是不太好的
+
+    meta_dqn = DQN(2, 3) # 元学习的神经网络，注意和 task 中的区分开
+    meta_loss = 0.0
+    meta_loss_list = []
+    meta_optimizer = optim.Adam(meta_dqn.Q.parameters(), lr=0.001) # 元优化器，使用 Adam 优化器，学习率 0.001
+
+
+    num_task_episodes = 3
+    for i in range(num_task_episodes):
+
+        env = sample_env(env_list)
+        task_train(env, meta_dqn, meta_loss, meta_optimizer) # 将元神经网络也传入, 浅拷贝，传的是引用
+
+    # 状态维度变化，动作维度变化，任务结构变化，元学习是不太好的
+    # TODO: 所有 task 完成后，更新 meta model, 并且保存模型参数
+
+
+    meta_optimizer.zero_grad() # 清空梯度
+    meta_loss.backward() # 反向传播
+    meta_optimizer.step() # 更新参数
+
+    torch.save(meta_dqn.Q.state_dict(), "meta_model.pth") # 保存模型参数
+
+    # new_model = DQN(2, 3)
+    # new_model.Q.load_state_dict(torch.load("meta_model.pth"))
+
+    # new_model.Q.eval() # 设置为评估模式, 不进行训练
